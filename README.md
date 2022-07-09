@@ -1,2 +1,3 @@
-# dino
- Let's build DINO from scratch
+# DINO
+
+Let's build DINO (https://github.com/facebookresearch/dino) from scratch
