@@ -18,7 +18,7 @@ def _norm_cdf(x: float) -> float:
 
 
 @beartype.beartype
-def truncated_normal(
+def _truncated_normal(
     tensor, mean: float = 0, std: float = 1, a: float = -2, b: float = 2
 ) -> torch.Tensor:
     """Truncated normal distribution.
@@ -31,7 +31,7 @@ def truncated_normal(
         b:
 
     https://github.com/facebookresearch/dino/blob/main/utils.py
-    Method based on https://people.sc.fsu.edu/~jburkardt/presentations/truncated_normal.pdf
+    Method based on https://people.sc.fsu.edu/~jburkardt/presentations/_truncated_normal.pdf
     """
     if (mean < a - 2 * std) or (mean > b + 2 * std):
         warnings.warn(
@@ -65,9 +65,23 @@ def truncated_normal(
 
 @beartype.beartype
 def _init_dino_head(linear_module: nn.Linear):
-    truncated_normal(linear_module.weight, std=0.02)
+    _truncated_normal(linear_module.weight, std=0.02)
     if linear_module.bias is not None:
         nn.init.constant_(linear_module.bias, 0)
+
+
+class Normalize(nn.Module):
+    def __init__(self, p=2.0, dim=1, eps=1e-12, out=None):
+        super().__init__()
+        self.p = p
+        self.dim = dim
+        self.eps = eps
+        self.out = out
+
+    def forward(self, x):
+        return torch.nn.functional.normalize(
+            x, p=self.p, dim=self.dim, eps=self.eps, out=self.out
+        )
 
 
 @beartype.beartype
@@ -101,4 +115,6 @@ def dino_head(
     last_layer.weight_g.requires_grad = False
 
     # TODO: Give the module a name
-    return nn.Sequential(module, last_layer, name)
+    return nn.Sequential(module, Normalize(dim=-1, p=2), last_layer)
+
+
