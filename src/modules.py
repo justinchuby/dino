@@ -2,7 +2,9 @@
 
 https://github.com/facebookresearch/dino/blob/main/vision_transformer.py
 """
+import functools
 import math
+from typing import Sequence, Type
 import warnings
 import beartype
 import torch
@@ -118,3 +120,60 @@ def dino_head(
     return nn.Sequential(module, Normalize(dim=-1, p=2), last_layer)
 
 
+def vision_transformer(
+    img_size: Sequence[int]=(224,),
+    patch_size: int=16,
+    input_channels: int=3,
+    num_classes: int=0,
+    embed_dim: int=768,
+    depth: int=12,
+    num_heads: int=12,
+    mlp_ratio: float=4.0,
+    qkv_bias: bool=False,
+    qk_scale=None,
+    drop_rate: float=0.0,
+    attn_drop_rate: float=0.0,
+    drop_path_rate: float=0.0,
+    norm_layer: Type[nn.LayerNorm]=nn.LayerNorm,
+    **kwargs
+):
+    pass
+
+
+def vit_tiny(patch_size=16, **kwargs):
+    return vision_transformer(
+        patch_size=patch_size,
+        embed_dim=192,
+        depth=12,
+        num_heads=3,
+        mlp_ratio=4,
+        qkv_bias=True,
+        norm_layer=functools.partial(nn.LayerNorm, eps=1e-6),
+        **kwargs
+    )
+
+
+def vit_small(patch_size=16, **kwargs):
+    return vision_transformer(
+        patch_size=patch_size,
+        embed_dim=384,
+        depth=12,
+        num_heads=6,
+        mlp_ratio=4,
+        qkv_bias=True,
+        norm_layer=functools.partial(nn.LayerNorm, eps=1e-6),
+        **kwargs
+    )
+
+
+def vit_base(patch_size=16, **kwargs):
+    return vision_transformer(
+        patch_size=patch_size,
+        embed_dim=768,
+        depth=12,
+        num_heads=12,
+        mlp_ratio=4,
+        qkv_bias=True,
+        norm_layer=functools.partial(nn.LayerNorm, eps=1e-6),
+        **kwargs
+    )
