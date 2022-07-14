@@ -134,7 +134,7 @@ def vision_transformer(
     drop_rate: float=0.0,
     attn_drop_rate: float=0.0,
     drop_path_rate: float=0.0,
-    norm_layer: Type[nn.LayerNorm]=nn.LayerNorm,
+    norm_layer=nn.LayerNorm,
     **kwargs
 ):
     pass
