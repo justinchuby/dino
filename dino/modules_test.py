@@ -1,5 +1,7 @@
-from dino import modules
 import unittest
+
+from dino import modules
+
 
 class VisionTransformerTest(unittest.TestCase):
     def test_vit_tiny_can_initilize(self):

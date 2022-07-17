@@ -4,13 +4,14 @@ https://github.com/facebookresearch/dino/blob/main/vision_transformer.py
 """
 import functools
 import math
-from typing import Optional, Type
 import warnings
+from typing import Optional, Type
+
 import beartype
+import einops
 import torch
 from torch import nn
 from torchtyping import TensorType
-import einops
 
 SQRT_2 = math.sqrt(2.0)
 
