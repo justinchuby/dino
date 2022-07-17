@@ -1,9 +1,24 @@
 """Data augmentation and preprocessing functions."""
+from __future__ import annotations
 
 import torch
 from torch import nn
 import math
 from torchtyping import TensorType
+
+
+def prepare_tokens(x, patch_embed: PatchEmbed):
+    B, nc, w, h = x.shape
+    x = self.patch_embed(x)  # patch linear embedding
+
+    # add the [CLS] token to the embed patch tokens
+    cls_tokens = self.cls_token.expand(B, -1, -1)
+    x = torch.cat((cls_tokens, x), dim=1)
+
+    # add positional encoding to each token
+    x = x + self.interpolate_pos_encoding(x, w, h)
+
+    return self.pos_drop(x)
 
 
 def interpolate_pos_encoding(
