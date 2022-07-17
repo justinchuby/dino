@@ -5,13 +5,13 @@ https://github.com/facebookresearch/dino/blob/main/vision_transformer.py
 import functools
 import math
 import warnings
-from typing import Optional, Type
+from typing import List, Optional, Type
 
 import beartype
 import einops
 import torch
 from torch import nn
-from torchtyping import TensorType
+from torchtyping import TensorType  # type: ignore
 
 SQRT_2 = math.sqrt(2.0)
 
@@ -388,7 +388,7 @@ def dino_head(
     bottleneck_dim: int = 256,
 ) -> nn.Module:
     """Creates the DINO head."""
-    layers = []
+    layers: List[nn.Module] = []
     if n_layers == 1:
         layers.append(nn.Linear(input_dim, bottleneck_dim))
     else:
@@ -398,7 +398,7 @@ def dino_head(
             layers.append(nn.Linear(hidden_dim, hidden_dim))
             layers.append(nn.GELU())
         layers.append(nn.Linear(hidden_dim, bottleneck_dim))
-    module = nn.ModuleList(*layers)
+    module = nn.ModuleList(layers)
 
     # Initialize the weights
     for layer in module:
