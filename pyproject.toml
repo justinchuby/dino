@@ -16,6 +16,7 @@ disable = [
   "no-member",
   "line-too-long",
   "no-name-in-module",
+  "missing-docstring",
 ]
 
 [tool.pylint.basic]

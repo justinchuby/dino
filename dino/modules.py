@@ -87,12 +87,43 @@ class Normalize(nn.Module):
         )
 
 
+def _compute_num_patches(img_size: int, patch_size: int) -> int:
+    return (img_size // patch_size) * (img_size // patch_size)
+
+
+class PatchEmbed(nn.Module):
+    """Image to Patch Embedding."""
+
+    def __init__(
+        self,
+        img_size: int = 224,
+        patch_size: int = 16,
+        in_channels: int = 3,
+        embed_dim: int = 768,
+    ):
+        super().__init__()
+        num_patches = _compute_num_patches(img_size, patch_size)
+        self.img_size = img_size
+        self.patch_size = patch_size
+        self.num_patches = num_patches
+        self.in_channels = in_channels
+        self.embed_dim = embed_dim
+
+        self.proj = nn.Conv2d(
+            in_channels, embed_dim, kernel_size=patch_size, stride=patch_size
+        )
+
+    def forward(self, x: TensorType["batch", "channel", "height", "width"]):
+        # https://pytorch.org/vision/0.8/transforms.html
+        x = self.proj(x).flatten(2).transpose(1, 2)
+        return x
+
 
 def prepare_tokens(
     x: TensorType["batch", "channel", "width", "height"],
     patch_embed: PatchEmbed,
-    pos_embed: torch.Tensor,
-    cls_token: torch.Tensor,
+    cls_token: TensorType[1, 1, "embed_dim"],
+    pos_embed: TensorType[1, "patches_1", "embed_dim"],
     pos_drop: nn.Dropout,
 ) -> torch.Tensor:
     B, nc, w, h = x.shape
@@ -199,19 +230,19 @@ def dino_head(
 
 
 def vision_transformer(
-    img_size: Sequence[int]=(224,),
-    patch_size: int=16,
-    input_channels: int=3,
-    num_classes: int=0,
-    embed_dim: int=768,
-    depth: int=12,
-    num_heads: int=12,
-    mlp_ratio: float=4.0,
-    qkv_bias: bool=False,
+    img_size: Sequence[int] = (224,),
+    patch_size: int = 16,
+    input_channels: int = 3,
+    num_classes: int = 0,
+    embed_dim: int = 768,
+    depth: int = 12,
+    num_heads: int = 12,
+    mlp_ratio: float = 4.0,
+    qkv_bias: bool = False,
     qk_scale=None,
-    drop_rate: float=0.0,
-    attn_drop_rate: float=0.0,
-    drop_path_rate: float=0.0,
+    drop_rate: float = 0.0,
+    attn_drop_rate: float = 0.0,
+    drop_path_rate: float = 0.0,
     norm_layer=nn.LayerNorm,
     **kwargs
 ):
