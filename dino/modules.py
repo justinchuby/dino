@@ -4,19 +4,20 @@ https://github.com/facebookresearch/dino/blob/main/vision_transformer.py
 """
 import functools
 import math
-from typing import Sequence
+from typing import Optional, Type
 import warnings
 import beartype
 import torch
 from torch import nn
 from torchtyping import TensorType
+import einops
 
 SQRT_2 = math.sqrt(2.0)
 
 
 @beartype.beartype
 def _norm_cdf(x: float) -> float:
-    """Computes standard normal cumulative distribution function."""
+    """Compute standard normal cumulative distribution function."""
     return (1.0 + math.erf(x / SQRT_2)) / 2.0
 
 
@@ -118,6 +119,158 @@ class PatchEmbed(nn.Module):
         return x
 
 
+def drop_path(
+    x: torch.Tensor, drop_prob: float = 0.0, training: bool = False
+) -> torch.Tensor:
+    """Drop path for the DINO model."""
+    if drop_prob <= 0.0 or not training:
+        return x
+
+    keep_prob = 1 - drop_prob
+    # work with tensors of different dim, not just 2D ConvNets
+    # TODO: Comment the shape out and do broadcasting instead
+    shape = (x.size(0),) + (1,) * (x.ndim - 1)
+    random_tensor = keep_prob + torch.rand(shape, dtype=x.dtype, device=x.device)
+    random_tensor.floor_()  # binarize
+    output = x.div(keep_prob) * random_tensor
+    return output
+
+
+class DropPath(nn.Module):
+    """Drop paths (Stochastic Depth) per sample (when applied in main path of residual blocks)."""
+
+    def __init__(self, drop_prob=None):
+        super().__init__()
+        self.drop_prob = drop_prob
+
+    def forward(self, x):
+        return drop_path(x, self.drop_prob, self.training)
+
+
+class Mlp(nn.Module):
+    def __init__(
+        self,
+        in_features: int,
+        hidden_features: Optional[int] = None,
+        out_features: Optional[int] = None,
+        activation: Type[nn.Module] = nn.GELU,
+        drop_prob: float = 0.0,
+    ):
+        super().__init__()
+        out_features = out_features or in_features
+        hidden_features = hidden_features or in_features
+        self.linear_1 = nn.Linear(in_features, hidden_features)
+        self.activation = activation()
+        self.linear_2 = nn.Linear(hidden_features, out_features)
+        self.drop = nn.Dropout(drop_prob)
+
+    def forward(self, x):
+        x = self.linear_1(x)
+        x = self.activation(x)
+        x = self.drop(x)
+        x = self.linear_2(x)
+        x = self.drop(x)
+        return x
+
+
+class Attention(nn.Module):
+    def __init__(
+        self,
+        dim,
+        num_heads=8,
+        qkv_bias=False,
+        qk_scale=None,
+        attention_drop_prob=0.0,
+        proj_drop=0.0,
+    ):
+        """Create a multi-head attention layer.
+
+        Args:
+            dim: The dimension of the input.
+            num_heads: The number of attention heads.
+            qkv_bias: Whether to use bias in the query, key, value layers.
+            qk_scale: The scale of the query layer.
+            attention_drop_prob: The probability of dropout in the attention layer.
+            proj_drop: The probability of dropout in the projection layer.
+        """
+        super().__init__()
+        self.num_heads = num_heads
+        head_dim = dim // num_heads
+        self.scale = qk_scale or head_dim**-0.5
+
+        self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+        self.drop = nn.Dropout(attention_drop_prob)
+        self.proj = nn.Linear(dim, dim)
+        self.proj_drop = nn.Dropout(proj_drop)
+
+    def forward(self, x: TensorType["batch", "N", "channel"]):
+        B = x.size(0)
+        N = x.size(1)
+        C = x.size(2)
+
+        # NOTE: Why reshaping?
+        qkv = (
+            self.qkv(x)
+            .reshape(B, N, 3, self.num_heads, C // self.num_heads)
+            .permute(2, 0, 3, 1, 4)
+        )
+        query, key, value = qkv[0], qkv[1], qkv[2]
+
+        attn = (query @ key.transpose(-2, -1)) * self.scale
+        attn = attn.softmax(dim=-1)
+        attn = self.drop(attn)
+
+        x = (attn @ value).transpose(1, 2).reshape(B, N, C)
+        x = self.proj(x)
+        x = self.proj_drop(x)
+        return x, attn
+
+
+class Block(nn.Module):
+    def __init__(
+        self,
+        dim,
+        num_heads,
+        mlp_ratio=4.0,
+        qkv_bias=False,
+        qk_scale=None,
+        mlp_drop_prob=0.0,
+        attention_drop_prob=0.0,
+        drop_path_prob=0.0,
+        activation=nn.GELU,
+        norm_layer=nn.LayerNorm,
+    ):
+        super().__init__()
+        self.norm1 = norm_layer(dim)
+        self.attn = Attention(
+            dim,
+            num_heads=num_heads,
+            qkv_bias=qkv_bias,
+            qk_scale=qk_scale,
+            attention_drop_prob=attention_drop_prob,
+            proj_drop=mlp_drop_prob,
+        )
+        self.drop_path = (
+            DropPath(drop_path_prob) if drop_path_prob > 0.0 else nn.Identity()
+        )
+        self.norm2 = norm_layer(dim)
+        mlp_hidden_dim = int(dim * mlp_ratio)
+        self.mlp = Mlp(
+            in_features=dim,
+            hidden_features=mlp_hidden_dim,
+            activation=activation,
+            drop_prob=mlp_drop_prob,
+        )
+
+    def forward(self, x, return_attention=False):
+        y, attn = self.attn(self.norm1(x))
+        if return_attention:
+            return attn
+        x = x + self.drop_path(y)
+        x = x + self.drop_path(self.mlp(self.norm2(x)))
+        return x
+
+
 def prepare_tokens(
     x: TensorType["batch", "channel", "height", "width"],
     patch_embed: PatchEmbed,
@@ -160,6 +313,20 @@ def prepare_tokens(
     return pos_drop(x)
 
 
+def _to_bchw(
+    x: TensorType["batch", "height", "width", "channel"]
+) -> TensorType["batch", "channel", "height", "width"]:
+    # return x.permute(0, 3, 1, 2)
+    return einops.rearrange(x, "b h w c -> b c h w")
+
+
+def _to_bhwc(
+    x: TensorType["batch", "channel", "height", "width"]
+) -> TensorType["batch", "height", "width", "channel"]:
+    # return x.permute(0, 2, 3, 1)
+    return einops.rearrange(x, "b c h w -> b h w c")
+
+
 def interpolate_pos_encoding(
     pos_embed: TensorType[1, "patch_1", "token"],
     n_patch: int,
@@ -186,16 +353,16 @@ def interpolate_pos_encoding(
         1, pos_embed_side_length, pos_embed_side_length, dim
     )
     patch_pos_embed = nn.functional.interpolate(
-        reshaped_patch_pos_embed.permute(
-            0, 3, 1, 2
+        _to_bchw(
+            reshaped_patch_pos_embed
         ),  # (1, dim, pos_embed_side_length, pos_embed_side_length)
         size=(pos_embed_hight, pos_embed_width),
         mode="bicubic",
     )
     assert int(pos_embed_hight) == patch_pos_embed.size(-2)
     assert int(pos_embed_width) == patch_pos_embed.size(-1)
-    patch_pos_embed = patch_pos_embed.permute(
-        0, 2, 3, 1
+    patch_pos_embed = _to_bhwc(
+        patch_pos_embed
     )  # (1, pos_embed_side_length, pos_embed_side_length, dim)
     patch_pos_embed = patch_pos_embed.view(
         1, -1, dim
@@ -240,11 +407,13 @@ def dino_head(
 
 
 class VisionTransformer(nn.Module):
-    """ Vision Transformer """
-    def __init__(self,
-        img_size: Sequence[int] = (224,),
+    """Vision Transformer"""
+
+    def __init__(
+        self,
+        img_size: int = 224,
         patch_size: int = 16,
-        input_channels: int = 3,
+        in_channels: int = 3,
         num_classes: int = 0,
         embed_dim: int = 768,
         depth: int = 12,
@@ -256,34 +425,74 @@ class VisionTransformer(nn.Module):
         attn_drop_rate: float = 0.0,
         drop_path_rate: float = 0.0,
         norm_layer=nn.LayerNorm,
-        **kwargs
+        **kwargs,
     ):
         super().__init__()
-        # TODO: Here
         self.num_features = self.embed_dim = embed_dim
 
         self.patch_embed = PatchEmbed(
-            img_size=img_size[0], patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim)
+            img_size=img_size,
+            patch_size=patch_size,
+            in_channels=in_channels,
+            embed_dim=embed_dim,
+        )
         num_patches = self.patch_embed.num_patches
 
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, embed_dim))
         self.pos_drop = nn.Dropout(p=drop_rate)
 
-        dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]  # stochastic depth decay rule
-        self.blocks = nn.ModuleList([
-            Block(
-                dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, qk_scale=qk_scale,
-                drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer)
-            for i in range(depth)])
+        # Stochastic depth decay rule
+        depth_decay_rule = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]
+        self.blocks = nn.ModuleList(
+            [
+                Block(
+                    dim=embed_dim,
+                    num_heads=num_heads,
+                    mlp_ratio=mlp_ratio,
+                    qkv_bias=qkv_bias,
+                    qk_scale=qk_scale,
+                    mlp_drop_prob=drop_rate,
+                    attention_drop_prob=attn_drop_rate,
+                    drop_path_prob=depth_decay_rule[i],
+                    norm_layer=norm_layer,
+                )
+                for i in range(depth)
+            ]
+        )
         self.norm = norm_layer(embed_dim)
 
         # Classifier head
-        self.head = nn.Linear(embed_dim, num_classes) if num_classes > 0 else nn.Identity()
+        self.head = (
+            nn.Linear(embed_dim, num_classes) if num_classes > 0 else nn.Identity()
+        )
 
-        trunc_normal_(self.pos_embed, std=.02)
-        trunc_normal_(self.cls_token, std=.02)
+        _truncated_normal(self.pos_embed, std=0.02)
+        _truncated_normal(self.cls_token, std=0.02)
         self.apply(self._init_weights)
+
+    def _init_weights(self, module: nn.Module):
+        if isinstance(module, nn.Linear):
+            _truncated_normal(module.weight, std=0.02)
+            if isinstance(module, nn.Linear) and module.bias is not None:
+                nn.init.constant_(module.bias, 0)
+        elif isinstance(module, nn.LayerNorm):
+            nn.init.constant_(module.bias, 0)
+            nn.init.constant_(module.weight, 1.0)
+
+    def forward(self, x: TensorType["batch", "channel", "height", "width"]) -> torch.Tensor:
+        x = prepare_tokens(
+            x,
+            self.patch_embed,
+            self.cls_token,
+            self.pos_embed,
+            self.pos_drop,
+            x.size(0),
+        )
+        for block in self.blocks:
+            x = block(x)
+        x = self.norm(x)
+        return x[:, 0]
 
 
 def vit_tiny(patch_size=16, **kwargs):
@@ -295,7 +504,7 @@ def vit_tiny(patch_size=16, **kwargs):
         mlp_ratio=4,
         qkv_bias=True,
         norm_layer=functools.partial(nn.LayerNorm, eps=1e-6),
-        **kwargs
+        **kwargs,
     )
 
 
@@ -308,7 +517,7 @@ def vit_small(patch_size=16, **kwargs):
         mlp_ratio=4,
         qkv_bias=True,
         norm_layer=functools.partial(nn.LayerNorm, eps=1e-6),
-        **kwargs
+        **kwargs,
     )
 
 
@@ -321,5 +530,5 @@ def vit_base(patch_size=16, **kwargs):
         mlp_ratio=4,
         qkv_bias=True,
         norm_layer=functools.partial(nn.LayerNorm, eps=1e-6),
-        **kwargs
+        **kwargs,
     )
