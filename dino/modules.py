@@ -120,27 +120,40 @@ class PatchEmbed(nn.Module):
 
 
 def prepare_tokens(
-    x: TensorType["batch", "channel", "width", "height"],
+    x: TensorType["batch", "channel", "height", "width"],
     patch_embed: PatchEmbed,
     cls_token: TensorType[1, 1, "embed_dim"],
     pos_embed: TensorType[1, "patches_1", "embed_dim"],
     pos_drop: nn.Dropout,
 ) -> torch.Tensor:
-    B, nc, w, h = x.shape
-    x = patch_embed(x)  # patch linear embedding
+    """Prepare tokens for the transformer.
+
+    Args:
+        x: Input image.
+        patch_embed: Patch embedding.
+        cls_token: CLS token.
+        pos_embed: Position embedding.
+        pos_drop: Position dropout.
+
+    Returns:
+        Prepared tokens.
+    """
+    batch, _, height, width = x.shape
+    x = patch_embed(x)  # Patch linear embedding
 
     # Add the [CLS] token to the embed patch tokens
-    cls_tokens = cls_token.expand(B, -1, -1)
+    batch = x.size(0)
+    cls_tokens = cls_token.expand(batch, -1, -1)
     x = torch.cat((cls_tokens, x), dim=1)
 
-    # add positional encoding to each token
+    # Add positional encoding to each token
     x = x + interpolate_pos_encoding(
         pos_embed,
         n_patch=x.size(1) - 1,
         dim=x.size(-1),
         patch_size=patch_embed.patch_size,
-        width=w,
-        height=h,
+        height=height,
+        width=width,
     )
 
     return pos_drop(x)
@@ -151,22 +164,22 @@ def interpolate_pos_encoding(
     n_patch: int,  # TODO: Is this dynamic?
     dim: int,  # TODO: Is this dynamic?
     patch_size: int,
-    width: int,  # x.size(-2)
-    height: int,  # x.size(-1)
+    height: int,  # x.size(-2)
+    width: int,  # x.size(-1)
 ):
     # B, nc, w, h = x.shape
     # n_patch = x.size(1) - 1
     # dim = x.size(-1)
 
     token_size = pos_embed.size(1) - 1  # The number of tokens (minus the cls token)
-    if n_patch == token_size and width == height:
+    if n_patch == token_size and height == width:
         # No need to interpolate
         return pos_embed
 
     class_pos_embed = pos_embed[:, 0]  # (dim, 1)
     patch_pos_embed = pos_embed[:, 1:]  # (dim, token_size)
-    pos_embed_width = width // patch_size
     pos_embed_hight = height // patch_size
+    pos_embed_width = width // patch_size
     # we add a small number to avoid floating point error in the interpolation
     # see discussion at https://github.com/facebookresearch/dino/issues/8
     # What is w0 and h0?
@@ -179,11 +192,11 @@ def interpolate_pos_encoding(
         reshaped_patch_pos_embed.permute(
             0, 3, 1, 2
         ),  # (1, dim, pos_embed_side_length, pos_embed_side_length)
-        size=(pos_embed_width, pos_embed_hight),
+        size=(pos_embed_hight, pos_embed_width),
         mode="bicubic",
     )
-    assert int(pos_embed_width) == patch_pos_embed.size(-2)
-    assert int(pos_embed_hight) == patch_pos_embed.size(-1)
+    assert int(pos_embed_hight) == patch_pos_embed.size(-2)
+    assert int(pos_embed_width) == patch_pos_embed.size(-1)
     patch_pos_embed = patch_pos_embed.permute(
         0, 2, 3, 1
     )  # (1, pos_embed_side_length, pos_embed_side_length, dim)
