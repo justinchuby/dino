@@ -102,10 +102,9 @@ class PatchEmbed(nn.Module):
         embed_dim: int = 768,
     ):
         super().__init__()
-        num_patches = _compute_num_patches(img_size, patch_size)
         self.img_size = img_size
         self.patch_size = patch_size
-        self.num_patches = num_patches
+        self.num_patches = _compute_num_patches(img_size, patch_size)
         self.in_channels = in_channels
         self.embed_dim = embed_dim
 
@@ -125,6 +124,7 @@ def prepare_tokens(
     cls_token: TensorType[1, 1, "embed_dim"],
     pos_embed: TensorType[1, "patches_1", "embed_dim"],
     pos_drop: nn.Dropout,
+    patch_size: int,
 ) -> torch.Tensor:
     """Prepare tokens for the transformer.
 
@@ -134,6 +134,7 @@ def prepare_tokens(
         cls_token: CLS token.
         pos_embed: Position embedding.
         pos_drop: Position dropout.
+        patch_size: Patch size.
 
     Returns:
         Prepared tokens.
@@ -151,7 +152,7 @@ def prepare_tokens(
         pos_embed,
         n_patch=x.size(1) - 1,
         dim=x.size(-1),
-        patch_size=patch_embed.patch_size,
+        patch_size=patch_size,
         height=height,
         width=width,
     )
@@ -161,16 +162,12 @@ def prepare_tokens(
 
 def interpolate_pos_encoding(
     pos_embed: TensorType[1, "patch_1", "token"],
-    n_patch: int,  # TODO: Is this dynamic?
-    dim: int,  # TODO: Is this dynamic?
+    n_patch: int,
+    dim: int,
     patch_size: int,
     height: int,  # x.size(-2)
     width: int,  # x.size(-1)
 ):
-    # B, nc, w, h = x.shape
-    # n_patch = x.size(1) - 1
-    # dim = x.size(-1)
-
     token_size = pos_embed.size(1) - 1  # The number of tokens (minus the cls token)
     if n_patch == token_size and height == width:
         # No need to interpolate
@@ -242,28 +239,55 @@ def dino_head(
     return nn.Sequential(module, Normalize(dim=-1, p=2), last_layer)
 
 
-def vision_transformer(
-    img_size: Sequence[int] = (224,),
-    patch_size: int = 16,
-    input_channels: int = 3,
-    num_classes: int = 0,
-    embed_dim: int = 768,
-    depth: int = 12,
-    num_heads: int = 12,
-    mlp_ratio: float = 4.0,
-    qkv_bias: bool = False,
-    qk_scale=None,
-    drop_rate: float = 0.0,
-    attn_drop_rate: float = 0.0,
-    drop_path_rate: float = 0.0,
-    norm_layer=nn.LayerNorm,
-    **kwargs
-):
-    pass
+class VisionTransformer(nn.Module):
+    """ Vision Transformer """
+    def __init__(self,
+        img_size: Sequence[int] = (224,),
+        patch_size: int = 16,
+        input_channels: int = 3,
+        num_classes: int = 0,
+        embed_dim: int = 768,
+        depth: int = 12,
+        num_heads: int = 12,
+        mlp_ratio: float = 4.0,
+        qkv_bias: bool = False,
+        qk_scale=None,
+        drop_rate: float = 0.0,
+        attn_drop_rate: float = 0.0,
+        drop_path_rate: float = 0.0,
+        norm_layer=nn.LayerNorm,
+        **kwargs
+    ):
+        super().__init__()
+        # TODO: Here
+        self.num_features = self.embed_dim = embed_dim
+
+        self.patch_embed = PatchEmbed(
+            img_size=img_size[0], patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim)
+        num_patches = self.patch_embed.num_patches
+
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
+        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, embed_dim))
+        self.pos_drop = nn.Dropout(p=drop_rate)
+
+        dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]  # stochastic depth decay rule
+        self.blocks = nn.ModuleList([
+            Block(
+                dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, qk_scale=qk_scale,
+                drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer)
+            for i in range(depth)])
+        self.norm = norm_layer(embed_dim)
+
+        # Classifier head
+        self.head = nn.Linear(embed_dim, num_classes) if num_classes > 0 else nn.Identity()
+
+        trunc_normal_(self.pos_embed, std=.02)
+        trunc_normal_(self.cls_token, std=.02)
+        self.apply(self._init_weights)
 
 
 def vit_tiny(patch_size=16, **kwargs):
-    return vision_transformer(
+    return VisionTransformer(
         patch_size=patch_size,
         embed_dim=192,
         depth=12,
@@ -276,7 +300,7 @@ def vit_tiny(patch_size=16, **kwargs):
 
 
 def vit_small(patch_size=16, **kwargs):
-    return vision_transformer(
+    return VisionTransformer(
         patch_size=patch_size,
         embed_dim=384,
         depth=12,
@@ -289,7 +313,7 @@ def vit_small(patch_size=16, **kwargs):
 
 
 def vit_base(patch_size=16, **kwargs):
-    return vision_transformer(
+    return VisionTransformer(
         patch_size=patch_size,
         embed_dim=768,
         depth=12,
