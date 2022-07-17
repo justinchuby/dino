@@ -211,7 +211,13 @@ class Attention(nn.Module):
         # NOTE: Why reshaping?
         qkv = (
             self.qkv(x)
-            .reshape(B, N, 3, self.num_heads, C // self.num_heads)
+            .reshape(
+                B,
+                N,
+                3,
+                self.num_heads,
+                torch.div(C, self.num_heads, rounding_mode="trunc"),
+            )
             .permute(2, 0, 3, 1, 4)
         )
         query, key, value = qkv[0], qkv[1], qkv[2]
@@ -480,7 +486,9 @@ class VisionTransformer(nn.Module):
             nn.init.constant_(module.bias, 0)
             nn.init.constant_(module.weight, 1.0)
 
-    def forward(self, x: TensorType["batch", "channel", "height", "width"]) -> torch.Tensor:
+    def forward(
+        self, x: TensorType["batch", "channel", "height", "width"]
+    ) -> torch.Tensor:
         x = prepare_tokens(
             x,
             self.patch_embed,
