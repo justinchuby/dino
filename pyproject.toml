@@ -1,0 +1,40 @@
+[tool.black]
+# extend-exclude needs to be a regular expression
+# extend-exclude = "third_party/"
+target-version = ["py37", "py38", "py39", "py310"]
+
+[tool.isort]
+profile = "black"
+# extend_skip_glob = [
+#     "third_party/*",
+# ]
+
+[tool.pylint.messages_control]
+
+disable = [
+  "import-error",
+  "no-member",
+  "line-too-long",
+  "no-name-in-module",
+  "missing-docstring",
+]
+
+[tool.pylint.basic]
+
+good-names = [
+  "_",
+  "e",
+  "ex",
+  "f",
+  "g",
+  "i",
+  "j",
+  "k",
+  "m",
+  "n",
+  "Run",
+  "s",
+  "x",
+  "y",
+  "z",
+]
